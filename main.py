@@ -5,8 +5,20 @@ import secrets
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
+import asyncio
+import redis
+import json
 
 DATABASE_URL = 'sqlite:///./livros.db'
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def salvar_livro_redis(livro_id: int, livro: LivrosDB):
+    redis_client.set(f"livro: {livro_id}", json.dumps(livro.dict()))
+    
+def deletar_livro_redis(livro_id: int):
+    redis_client.delete(f"livro: {livro_id}")
+    
 
 engine = create_engine(DATABASE_URL, connect_args={'check_same_thread': False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -54,16 +66,44 @@ def get_db():
         yield db
     finally:
         db.close()
+        
+async def chamadas_externas_1():
+    await asyncio.sleep(3)
+    return "resultado chamada 1"
+
+async def chamadas_externas_2():
+    await asyncio.sleep(3)
+    return "resultado chamada 2" 
+
+async def chamadas_externas_3():
+    await asyncio.sleep(3)
+    return "resultado chamada 3"
+
+@app.get("/chamadas-externas")
+async def chamadas_externas():
+    tarefa1 = asyncio.create_task(chamadas_externas_1())
+    tarefa2 = asyncio.create_task(chamadas_externas_2())
+    tarefa3 = asyncio.create_task(chamadas_externas_3())
+
+    resultado1 = await tarefa1
+    resultado2 = await tarefa2
+    resultado3 = await tarefa3
+        
+    return {
+        "mensagem" : "todas chamadas nas API's foram concluídas com sucesso",
+        "resultado" : [resultado1,resultado2,resultado3]
+    }
 
 @app.get('/livros')
-def get_livros(db: Session = Depends(get_db), username: str = Depends(autenticar_meu_usuario)):
+async def get_livros(db: Session = Depends(get_db), username: str = Depends(autenticar_meu_usuario)):
     livros = db.query(LivrosDB).all()
+    await asyncio.sleep(3)
     if not livros:
         return {'mensagem': 'A livraria está vazia.'}
     return {'livros': livros}
 
 @app.post('/adicionar')
-def post_livros(id_livro: int, livro: LivrosFormato, db: Session = Depends(get_db), username: str = Depends(autenticar_meu_usuario)):
+async def post_livros(id_livro: int, livro: LivrosFormato, db: Session = Depends(get_db), username: str = Depends(autenticar_meu_usuario)):
     livro_existente = db.query(LivrosDB).filter(LivrosDB.id_livro == id_livro).first()
     if livro_existente:
         raise HTTPException(status_code=400, detail='Esse livro ja foi registrado.')
@@ -76,10 +116,13 @@ def post_livros(id_livro: int, livro: LivrosFormato, db: Session = Depends(get_d
     )
     db.add(novo_livro)
     db.commit()
+    
+    salvar_livro_redis(novo_livro.id, livro)
+    
     return {'message': 'Livro adicionado com sucesso'}
 
 @app.put('/atualizar/{id_livro}')
-def put_livros(id_livro: int, livro: LivrosFormato, db: Session = Depends(get_db), username: str = Depends(autenticar_meu_usuario)):
+async def put_livros(id_livro: int, livro: LivrosFormato, db: Session = Depends(get_db), username: str = Depends(autenticar_meu_usuario)):
     meu_livro = db.query(LivrosDB).filter(LivrosDB.id_livro == id_livro).first()
     if not meu_livro:
         raise HTTPException(status_code=404, detail='O livro não foi encontrado.')
@@ -91,7 +134,7 @@ def put_livros(id_livro: int, livro: LivrosFormato, db: Session = Depends(get_db
     return {'message': 'Livro atualizado com sucesso.'}
 
 @app.delete('/deletar/{id_livro}')
-def delete_livros(id_livro: int, db: Session = Depends(get_db), username: str = Depends(autenticar_meu_usuario)):
+async def delete_livros(id_livro: int, db: Session = Depends(get_db), username: str = Depends(autenticar_meu_usuario)):
     meu_livro = db.query(LivrosDB).filter(LivrosDB.id_livro == id_livro).first()
     if not meu_livro:
         raise HTTPException(status_code=404, detail='O livro não foi encontrado.')
